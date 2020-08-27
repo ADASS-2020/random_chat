@@ -9,9 +9,10 @@ from discord.ext import commands
 BOT_TOKEN = os.environ['CHAT_BOT_SECRET']                           # REQUIRED
 VOICE_CHANNEL_CAT = os.environ['CHAT_VOICE_CAT']                    # REQUIRED
 
-NUM_PARTICIPANTS = int(os.environ.get('CHET_NUM_PARTICIPANTS', 5))  # OPTIONAL
+NUM_PARTICIPANTS = int(os.environ.get('CHAT_NUM_PARTICIPANTS', 5))  # OPTIONAL
 CHANNEL_ID = int(os.environ.get('CHAT_CHANNEL_ID', None))           # OPTIONAL
-HELP_MSG_DELAY = int(os.environ.get('CHAT_HELP_DELAY', 30))         # OPTIONAL
+HELP_MSG_DELAY = int(os.environ.get('CHAT_HELP_DELAY', 600))        # OPTIONAL
+CAN_CREATE_CHANNELS = 'CHAT_CREATE_CHANNELS' in os.environ
 
 # Configuration constants
 HELP_MSG = '''Welcome to the social channel!
@@ -43,17 +44,18 @@ class ChatCog(commands.Cog):
         self._voice_chs = []
 
     async def get_voice_channels(self, guild):
+        """
+        Get all voice channels under the `self.voice_cat_name` category.
+
+        Retrun
+            List[VoiceChannel]: if the category exists
+            None: if the category does not exist.
+        """
         # Get the list of voice channels and all folks in them.
         for cat, chs in guild.by_category():
             if cat.name == self.voice_cat_name:
                 self.voice_cat = cat
 
-                # Just make sure that we have at least one channel!
-                if not chs:
-                    try:
-                        chs = [await self.create_voice_channel(guild), ]
-                    except Exception as e:
-                        print(f'Unable to create new voice channel: {e!r}')
                 return chs
         return
 
@@ -63,9 +65,6 @@ class ChatCog(commands.Cog):
             category=self.voice_cat,
             user_limit=NUM_PARTICIPANTS
         )
-
-    def get_chatting_members(self, guild):
-        return [(ch, ch.members) for ch in self._voice_chs]
 
     @commands.Cog.listener()
     async def on_ready(self):
@@ -93,14 +92,15 @@ class ChatCog(commands.Cog):
         member = member or ctx.author
 
         self._voice_chs = await self.get_voice_channels(ctx.guild)
-        if not self._voice_chs:
+        if self._voice_chs is None:
+            # The voice channel category does not exist!
             print(f'Please (re)create the {self.voice_cat_name} category')
             await member.send(f'Hello {member.name}, we are having problems ' +
                               'with the social chat. Please contact @loc')
             return
 
         available = []
-        for ch, members in self.get_chatting_members(ctx.guild):
+        for ch, members in [(ch, ch.members) for ch in self._voice_chs]:
             if len(members) < NUM_PARTICIPANTS:
                 available.append(ch)
 
@@ -111,10 +111,10 @@ class ChatCog(commands.Cog):
                 )
                 return
 
-        if not available:
+        if not available and CAN_CREATE_CHANNELS:
             # Need to create more channels!
             try:
-                ch = await self.create_voice_channel()
+                ch = await self.create_voice_channel(ctx.guild)
             except Exception as e:
                 print(f'Unable to create new voice channel: {e!r}')
                 await member.send('All channels are full. ' +
@@ -122,8 +122,11 @@ class ChatCog(commands.Cog):
                 return
             else:
                 self._voice_chs.append(ch)
-        else:
+        elif available:
             ch = available[0]
+        else:
+            await member.send('All channels are full. Please try again later')
+            return
 
         invite = await ch.create_invite(max_uses=1)
         await member.send(f'Hello {member.name}, follow this invite to ' +
